@@ -2,6 +2,7 @@
 from __future__ import unicode_literals, print_function
 import logging
 import xml.etree.ElementTree as ET
+from xml.dom.minidom import parseString
 import json
 import requests
 import traceback
@@ -58,7 +59,7 @@ class XiamiClient(object):
         @brief 虾米音乐的音频文件有认证,每次认证只能访问一天,过期时间为中国区第二天8点.
                认证的authkey根据location字段进行组合,location每天0点更新.
                本函数将location转化为可供下载访问的文件地址.
-        @params _str 音乐对象的location字段
+        @param _str 音乐对象的location字段
         @return 文件地址
         '''
         head = int(_str[0])
@@ -79,6 +80,21 @@ class XiamiClient(object):
                 out += char
         return unquote(out).replace("^", "0")
 
+    def _extract_song(self, track):
+        ret = {}
+        keep_list = [
+            'songName', 'song_id', 'album_id', 'album_name', 'background',
+            'artist', 'artist_url', 'lyric', 'location',
+            'pic', 'album_pic', 'length', 'artist_id',
+        ]
+        for k in keep_list:
+            element_list = track.getElementsByTagName(k)
+            if len(element_list) > 0:
+                ret[k] = element_list[0].firstChild.nodeValue
+        if 'location' in ret:
+            ret['song_url'] = self.parse_location(ret['location'])
+        return ret
+
     def get_detail(self, _id):
         '''
         @brief 返回一首歌的详细信息
@@ -88,21 +104,32 @@ class XiamiClient(object):
         try:
             url = 'http://www.xiami.com/song/playlist/id/%s' % _id
             r = self._http_url('get', url, {})
-            root = ET.fromstring(r.text.encode('utf8'))
-            _prefix = '{http://xspf.org/ns/0/}'
-            track = root[0].find(_prefix + 'track')
-
-            ret = {}
-            keep_list = [
-                'title', 'song_id', 'album_id', 'album_name', 'background',
-                'artist', 'artist_url', 'lyric', 'location',
-                'pic', 'album_pic', 'length', 'artist_id',
-            ]
-            for k in keep_list:
-                element = track.find(_prefix + k)
-                if element is not None:
-                    ret[k] = element.text
-            return ret
+            doc = parseString(r.text.encode('utf8'))
+            tracks = doc.getElementsByTagName("track")
+            if len(tracks) > 0:
+                return self._extract_song(tracks[0])
+            return {}
         except:
             logging.error(traceback.format_exc())
             return {}
+
+    def get_album(self, _id):
+        '''
+        @brief 返回专题中的所有歌曲信息
+        @param _id albumID
+        @return a list of song-dict
+        '''
+        try:
+            url = 'http://www.xiami.com/song/playlist/id/%s/type/1' % _id
+            r = self._http_url('get', url, {})
+            doc = parseString(r.text.encode('utf8'))
+            tracks = doc.getElementsByTagName("track")
+            ret_list = []
+            for index, item in enumerate(tracks):
+                if len(item.childNodes) > 1:  # have dirty data
+                    ret = self._extract_song(item)
+                    ret_list.append(ret)
+            return ret_list
+        except:
+            logging.error(traceback.format_exc())
+            return []
